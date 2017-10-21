@@ -30,6 +30,7 @@ type Call struct {
 	methodType reflect.Type  // the type of the method
 	args       []Matcher     // the args
 	rets       []interface{} // the return values (if any)
+	retStubFn  interface{}   // retStubFn is a func used to stub the mocked method
 	origin     string        // file and line number of call setup
 
 	preReqs []*Call // prerequisite calls
@@ -78,13 +79,20 @@ func (c *Call) Do(f interface{}) *Call {
 	return c
 }
 
-// Return declares the values to be returned by the mocked function call.
+// Return declares the values to be returned by the mocked function call. Return could also be used to setup stub for
+// the mocked function. A stub function must have exact same function signature (same input types and output types) as
+// the mocked function.
 func (c *Call) Return(rets ...interface{}) *Call {
 	if h, ok := c.t.(testHelper); ok {
 		h.Helper()
 	}
 
 	mt := c.methodType
+	if len(rets) == 1 && mt == reflect.TypeOf(rets[0]) {
+		c.retStubFn = rets[0]
+		return c
+	}
+
 	if len(rets) != mt.NumOut() {
 		c.t.Fatalf("wrong number of arguments to Return for %T.%v: got %d, want %d [%s]",
 			c.receiver, c.method, len(rets), mt.NumOut(), c.origin)
@@ -322,6 +330,11 @@ func (c *Call) call(args []interface{}) (rets []interface{}, action func()) {
 		}
 	}
 
+	if c.retStubFn != nil {
+		// stub for mock as been setup
+		c.rets = c.callStubFn(args)
+	}
+
 	rets = c.rets
 	if rets == nil {
 		// Synthesize the zero value for each of the return args' types.
@@ -333,6 +346,28 @@ func (c *Call) call(args []interface{}) (rets []interface{}, action func()) {
 	}
 
 	return
+}
+
+func (c *Call) callStubFn(args []interface{}) []interface{} {
+	reflectArgs := []reflect.Value{}
+	for _, arg := range args {
+		reflectArgs = append(reflectArgs, reflect.ValueOf(arg))
+	}
+
+	fnValue := reflect.ValueOf(c.retStubFn)
+	reflectRets := fnValue.Call(reflectArgs)
+	var rets []interface{}
+	for _, ret := range reflectRets {
+		switch ret.Kind() {
+		case reflect.Chan, reflect.Func, reflect.Map, reflect.Ptr, reflect.Interface, reflect.Slice:
+			if ret.IsNil() {
+				rets = append(rets, nil)
+				continue
+			}
+		}
+		rets = append(rets, ret.Interface())
+	}
+	return rets
 }
 
 // InOrder declares that the given calls should occur in order.

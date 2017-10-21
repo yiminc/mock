@@ -15,12 +15,13 @@
 package gomock_test
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/golang/mock/gomock"
-	"strings"
 )
 
 type ErrorReporter struct {
@@ -130,6 +131,10 @@ func (s *Subject) FooMethod(arg string) int {
 
 func (s *Subject) BarMethod(arg string) int {
 	return 0
+}
+
+func (s *Subject) BazMethod(arg string) (int, string, *string, error) {
+	return 0, "", nil, nil
 }
 
 // A type purely for ActOnTestStructMethod
@@ -577,5 +582,34 @@ func TestTimes0(t *testing.T) {
 	ctrl.RecordCall(s, "FooMethod", "arg").Times(0)
 	rep.assertFatal(func() {
 		ctrl.Call(s, "FooMethod", "arg")
+	})
+}
+
+func TestReturnStub(t *testing.T) {
+	_, ctrl := createFixtures(t)
+	defer ctrl.Finish()
+
+	err := errors.New("stub-error")
+
+	s := new(Subject)
+	ctrl.RecordCall(s, "BazMethod", "arg").Return(func(v string) (int, string, *string, error) {
+		return 123, "stub", nil, err
+	}).Times(1)
+	rets := ctrl.Call(s, "BazMethod", "arg")
+
+	assertEqual(t, 123, rets[0])
+	assertEqual(t, "stub", rets[1])
+	assertEqual(t, nil, rets[2])
+	assertEqual(t, err, rets[3])
+}
+
+func TestReturnIncompatibleStub(t *testing.T) {
+	rep, ctrl := createFixtures(t)
+	rep.assertFatal(func() {
+		ctrl.RecordCall(new(Subject), "FooMethod", "arg").Return(func(v string) float32 {
+			return 123
+		})
+		defer ctrl.Finish()
+		t.Fatalf("Intentional panic. Return(stub) should fail as the stub's return type is different from expected.")
 	})
 }
